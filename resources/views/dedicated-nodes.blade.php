@@ -217,7 +217,7 @@
                 <option value="vless">VLESS</option>
                 <option value="vmess">VMess</option>
                 <option value="trojan">Trojan</option>
-                <option value="shadowsocks">SS</option>
+                <option value="shadowsocks">Shadowsocks</option>
                 <option value="tuic">TUIC</option>
                 <option value="hysteria">Hysteria</option>
                 <option value="anytls">AnyTLS</option>
