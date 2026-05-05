@@ -856,3 +856,10 @@ CREATE TABLE `v2_server_v2node` (
 
 ALTER TABLE `v2_server_route`
 CHANGE `action_value` `action_value` text NULL AFTER `action`;
+
+CREATE TABLE IF NOT EXISTS `v2_server_user` (
+                                  `server_id` int(10) unsigned NOT NULL,
+                                  `server_type` varchar(32) NOT NULL,
+                                  `user_id` int(10) unsigned NOT NULL,
+                                  PRIMARY KEY (`server_id`, `server_type`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

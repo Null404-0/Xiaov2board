@@ -586,3 +586,10 @@ CREATE TABLE `v2_user` (
 
 
 -- 2025-09-12 10:05:00
+
+CREATE TABLE `v2_server_user` (
+                                  `server_id` int(10) unsigned NOT NULL,
+                                  `server_type` varchar(32) NOT NULL,
+                                  `user_id` int(10) unsigned NOT NULL,
+                                  PRIMARY KEY (`server_id`, `server_type`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
