@@ -34,28 +34,59 @@ class ServerService
     }
 
     /**
-     * 判断节点对该用户是否可见
-     * 优先走专属分配逻辑，没有分配时走原有 group_id 逻辑
+     * 全局已被专属分配过的节点（任意用户）
+     * 返回格式: ['vless' => [1, 3], 'trojan' => [2], ...]
      */
-    private function isServerVisible(array|object $server, User $user, array $assignedIds, string $type): bool
+    private function getDedicatedNodes(): array
     {
-        $assignedForType = $assignedIds[$type] ?? [];
-        if (!empty($assignedForType) && in_array($server['id'], $assignedForType)) {
-            // 专属节点：show=1 才对该用户可见，其他用户不可见
-            return (bool)$server['show'];
+        return ServerUser::select('server_type', 'server_id')
+            ->distinct()
+            ->get()
+            ->groupBy('server_type')
+            ->map(fn($rows) => $rows->pluck('server_id')->unique()->values()->toArray())
+            ->toArray();
+    }
+
+    /**
+     * 该节点是否被任何用户专属分配过
+     */
+    private function isDedicatedNode(int $serverId, string $serverType): bool
+    {
+        return ServerUser::where('server_type', $serverType)
+            ->where('server_id', $serverId)
+            ->exists();
+    }
+
+    /**
+     * 判断节点对该用户是否可见
+     * 节点被任何人专属分配过 → 仅对被分配的用户可见，其他人完全不可见
+     * 节点没被任何人分配 → 走原有 group_id 逻辑
+     *
+     * $ctx = [
+     *     'user_assigned' => 当前用户的专属分配（getUserAssignedIds 结果）
+     *     'dedicated'     => 全局专属节点（getDedicatedNodes 结果）
+     * ]
+     */
+    private function isServerVisible(array|object $server, User $user, array $ctx, string $type): bool
+    {
+        $dedicatedForType = $ctx['dedicated'][$type] ?? [];
+        if (in_array($server['id'], $dedicatedForType)) {
+            // 专属节点：仅对被分配的用户可见，其他人（即使同 group）都看不到
+            $userAssignedForType = $ctx['user_assigned'][$type] ?? [];
+            return (bool)$server['show'] && in_array($server['id'], $userAssignedForType);
         }
-        // 原有逻辑：show=1 且 group_id 匹配
+        // 非专属节点：原有 group_id 逻辑
         return $server['show'] && in_array($user->group_id, $server['group_id']);
     }
 
-    public function getAvailableVless(User $user, array $assignedIds = []): array
+    public function getAvailableVless(User $user, array $ctx = []): array
     {
         $servers = [];
         $model = ServerVless::orderBy('sort', 'ASC');
         $server = $model->get();
         foreach ($server as $key => $v) {
             $server[$key]['type'] = 'vless';
-            if (!$this->isServerVisible($server[$key], $user, $assignedIds, 'vless')) continue;
+            if (!$this->isServerVisible($server[$key], $user, $ctx, 'vless')) continue;
             if (strpos($server[$key]['port'], '-') !== false) {
                 $server[$key]['port'] = Helper::randomPort($server[$key]['port']);
             }
@@ -84,14 +115,14 @@ class ServerService
         return $servers;
     }
 
-    public function getAvailableVmess(User $user, array $assignedIds = []): array
+    public function getAvailableVmess(User $user, array $ctx = []): array
     {
         $servers = [];
         $model = ServerVmess::orderBy('sort', 'ASC');
         $vmess = $model->get();
         foreach ($vmess as $key => $v) {
             $vmess[$key]['type'] = 'vmess';
-            if (!$this->isServerVisible($vmess[$key], $user, $assignedIds, 'vmess')) continue;
+            if (!$this->isServerVisible($vmess[$key], $user, $ctx, 'vmess')) continue;
             if (strpos($vmess[$key]['port'], '-') !== false) {
                 $vmess[$key]['port'] = Helper::randomPort($vmess[$key]['port']);
             }
@@ -106,14 +137,14 @@ class ServerService
         return $servers;
     }
 
-    public function getAvailableTrojan(User $user, array $assignedIds = []): array
+    public function getAvailableTrojan(User $user, array $ctx = []): array
     {
         $servers = [];
         $model = ServerTrojan::orderBy('sort', 'ASC');
         $trojan = $model->get();
         foreach ($trojan as $key => $v) {
             $trojan[$key]['type'] = 'trojan';
-            if (!$this->isServerVisible($trojan[$key], $user, $assignedIds, 'trojan')) continue;
+            if (!$this->isServerVisible($trojan[$key], $user, $ctx, 'trojan')) continue;
             if (strpos($trojan[$key]['port'], '-') !== false) {
                 $trojan[$key]['port'] = Helper::randomPort($trojan[$key]['port']);
             }
@@ -127,7 +158,7 @@ class ServerService
         return $servers;
     }
 
-    public function getAvailableTuic(User $user, array $assignedIds = [])
+    public function getAvailableTuic(User $user, array $ctx = [])
     {
         $availableServers = [];
         $model = ServerTuic::orderBy('sort', 'ASC');
@@ -135,7 +166,7 @@ class ServerService
         foreach ($servers as $key => $v) {
             $servers[$key]['type'] = 'tuic';
             $servers[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_TUIC_LAST_CHECK_AT', $v['id']));
-            if (!$this->isServerVisible($servers[$key], $user, $assignedIds, 'tuic')) continue;
+            if (!$this->isServerVisible($servers[$key], $user, $ctx, 'tuic')) continue;
             if (isset($servers[$v['parent_id']])) {
                 $servers[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_TUIC_LAST_CHECK_AT', $v['parent_id']));
                 $servers[$key]['created_at'] = $servers[$v['parent_id']]['created_at'];
@@ -145,7 +176,7 @@ class ServerService
         return $availableServers;
     }
 
-    public function getAvailableHysteria(User $user, array $assignedIds = [])
+    public function getAvailableHysteria(User $user, array $ctx = [])
     {
         $availableServers = [];
         $model = ServerHysteria::orderBy('sort', 'ASC');
@@ -153,7 +184,7 @@ class ServerService
         foreach ($servers as $key => $v) {
             $servers[$key]['type'] = 'hysteria';
             $servers[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_HYSTERIA_LAST_CHECK_AT', $v['id']));
-            if (!$this->isServerVisible($servers[$key], $user, $assignedIds, 'hysteria')) continue;
+            if (!$this->isServerVisible($servers[$key], $user, $ctx, 'hysteria')) continue;
             if (isset($servers[$v['parent_id']])) {
                 $servers[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_HYSTERIA_LAST_CHECK_AT', $v['parent_id']));
                 $servers[$key]['created_at'] = $servers[$v['parent_id']]['created_at'];
@@ -164,7 +195,7 @@ class ServerService
         return $availableServers;
     }
 
-    public function getAvailableShadowsocks(User $user, array $assignedIds = [])
+    public function getAvailableShadowsocks(User $user, array $ctx = [])
     {
         $servers = [];
         $model = ServerShadowsocks::orderBy('sort', 'ASC');
@@ -172,7 +203,7 @@ class ServerService
         foreach ($shadowsocks as $key => $v) {
             $shadowsocks[$key]['type'] = 'shadowsocks';
             $shadowsocks[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_SHADOWSOCKS_LAST_CHECK_AT', $v['id']));
-            if (!$this->isServerVisible($shadowsocks[$key], $user, $assignedIds, 'shadowsocks')) continue;
+            if (!$this->isServerVisible($shadowsocks[$key], $user, $ctx, 'shadowsocks')) continue;
             if (strpos($v['port'], '-') !== false) {
                 $shadowsocks[$key]['port'] = Helper::randomPort($v['port']);
             }
@@ -190,7 +221,7 @@ class ServerService
         return $servers;
     }
 
-    public function getAvailableAnyTLS(User $user, array $assignedIds = [])
+    public function getAvailableAnyTLS(User $user, array $ctx = [])
     {
         $servers = [];
         $model = ServerAnytls::orderBy('sort', 'ASC');
@@ -198,7 +229,7 @@ class ServerService
         foreach ($anytls as $key => $v) {
             $anytls[$key]['type'] = 'anytls';
             $anytls[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_ANYTLS_LAST_CHECK_AT', $v['id']));
-            if (!$this->isServerVisible($anytls[$key], $user, $assignedIds, 'anytls')) continue;
+            if (!$this->isServerVisible($anytls[$key], $user, $ctx, 'anytls')) continue;
             if (strpos($v['port'], '-') !== false) {
                 $anytls[$key]['port'] = Helper::randomPort($v['port']);
             }
@@ -211,7 +242,7 @@ class ServerService
         return $servers;
     }
 
-    public function getAvailableV2node(User $user, array $assignedIds = [])
+    public function getAvailableV2node(User $user, array $ctx = [])
     {
         $servers = [];
         $model = ServerV2node::orderBy('sort', 'ASC');
@@ -219,7 +250,7 @@ class ServerService
         foreach ($v2node as $key => $v) {
             $v2node[$key]['type'] = 'v2node';
             $v2node[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_V2NODE_LAST_CHECK_AT', $v['id']));
-            if (!$this->isServerVisible($v2node[$key], $user, $assignedIds, 'v2node')) continue;
+            if (!$this->isServerVisible($v2node[$key], $user, $ctx, 'v2node')) continue;
             if (isset($v2node[$v['parent_id']])) {
                 $v2node[$key]['last_check_at'] = Cache::get(CacheKey::get('SERVER_V2NODE_LAST_CHECK_AT', $v['parent_id']));
                 $v2node[$key]['created_at'] = $v2node[$v['parent_id']]['created_at'];
@@ -244,18 +275,21 @@ class ServerService
 
     public function getAvailableServers(User $user)
     {
-        // 一次性批量查出该用户的专属节点分配，避免 N+1
-        $assignedIds = $this->getUserAssignedIds($user->id);
+        // 一次性批量查出可见性上下文，避免 N+1
+        $ctx = [
+            'user_assigned' => $this->getUserAssignedIds($user->id),
+            'dedicated'     => $this->getDedicatedNodes(),
+        ];
 
         $servers = array_merge(
-            $this->getAvailableShadowsocks($user, $assignedIds),
-            $this->getAvailableVmess($user, $assignedIds),
-            $this->getAvailableTrojan($user, $assignedIds),
-            $this->getAvailableTuic($user, $assignedIds),
-            $this->getAvailableHysteria($user, $assignedIds),
-            $this->getAvailableVless($user, $assignedIds),
-            $this->getAvailableAnyTLS($user, $assignedIds),
-            $this->getAvailableV2node($user, $assignedIds)
+            $this->getAvailableShadowsocks($user, $ctx),
+            $this->getAvailableVmess($user, $ctx),
+            $this->getAvailableTrojan($user, $ctx),
+            $this->getAvailableTuic($user, $ctx),
+            $this->getAvailableHysteria($user, $ctx),
+            $this->getAvailableVless($user, $ctx),
+            $this->getAvailableAnyTLS($user, $ctx),
+            $this->getAvailableV2node($user, $ctx)
         );
         $tmp = array_column($servers, 'sort');
         array_multisort($tmp, SORT_ASC, $servers);
@@ -271,9 +305,23 @@ class ServerService
         }, $servers);
     }
 
-    public function getAvailableUsers($groupId)
+    public function getAvailableUsers($groupId, $serverId = null, $serverType = null)
     {
-        return User::whereIn('group_id', $groupId)
+        // 节点是专属节点 → 仅返回被分配的用户（仍要满足流量、过期、banned）
+        // 否则 → 走原有 group_id 逻辑
+        $query = User::query();
+        if ($serverId !== null && $serverType !== null && $this->isDedicatedNode((int)$serverId, (string)$serverType)) {
+            $assignedUserIds = ServerUser::where('server_type', $serverType)
+                ->where('server_id', $serverId)
+                ->pluck('user_id')
+                ->all();
+            if (empty($assignedUserIds)) return collect();
+            $query->whereIn('id', $assignedUserIds);
+        } else {
+            $query->whereIn('group_id', $groupId);
+        }
+
+        return $query
             ->whereRaw('u + d < transfer_enable')
             ->where(function ($query) {
                 $query->where('expired_at', '>=', time())
