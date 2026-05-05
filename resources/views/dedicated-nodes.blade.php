@@ -242,7 +242,7 @@
 <script>
 (function() {
     const SECURE_PATH = @json($secure_path);
-    const API_BASE = '/' + SECURE_PATH;
+    const API_BASE = '/api/v1/' + SECURE_PATH;
 
     const token = localStorage.getItem('authorization');
     if (!token) {
